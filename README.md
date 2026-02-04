@@ -31,7 +31,10 @@
 - **经验分享**：为其他MySQL学习者提供完整的学习路径参考
 
 ---
+<<<<<<< HEAD
 # MySQL Learning Notes Repository Description #
+=======
+>>>>>>> master
 
 ## English Introduction ##
 

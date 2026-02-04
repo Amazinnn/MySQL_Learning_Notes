@@ -449,6 +449,10 @@ ON (v.vend_id=p.vend_id) ORDER BY p.prod_amount;
 #### 第十五章 联结表练习题 ####
 
 **情景：通过等值联结显示每个产品的==供应商名称==和产品信息。**
+<<<<<<< HEAD
+=======
+
+>>>>>>> master
 ```MySQL
 SELECT v.vend_name,p.info FROM vendor AS v,products AS p
 WHERE v.vend_id=p.vend_id;
@@ -796,6 +800,180 @@ WHERE price >100 AND quantity = 0;
 > ```
 >
 
+<<<<<<< HEAD
+=======
+#### 第二十三章 使用存储过程练习题 ####
+
+**情景：创建一个存储过程来==更新产品价格==，接受产品ID和新价格作为参数。**
+
+```MySQL
+CREATE PROCEDURE price_update
+(IN id INT,IN new_price INT)
+BEGIN
+	UPDATE products SET prod_price = new_price
+	WHERE prod_id = id;
+END;
+```
+
+**情景：编写存储过程==查询指定客户==的所有订单信息，返回结果集。**
+```MySQL
+CREATE PROCEDURE order_select(IN id INT)
+BEGIN
+	SELECT c.cust_name,c.cust_id,o.prod_name,o.prod_info
+	FROM customers AS c INNER JOIN orders AS o 
+	ON c.cust_id = id AND o.cust_id = id;
+END;
+```
+**情景：创建存储过程，输入==订单编号==，通过OUT参数返回该订单的==总金额==								     		（总金额 = 订单明细中所有商品的单价 × 数量之和）。**
+
+```MySQL
+CREATE PROCEDURE TotalAmount(IN id INT,OUT total_amount DECIMAL(10,2))
+BEGIN
+	SELECT SUM(SELECT o.unit_price*o.quantity FROM orders AS o)
+	INTO total_amount;
+END;
+```
+**情景：设计存储过程==处理新订单==，包括插入订单头和订单明细，或者更新订单信息的完整事务。**
+
+```MySQL
+CREATE PROCEDURE handling_new_order
+(IN id INT,IN quantity INT,IN info VARCHAR(1000))
+BEGIN
+	INSERT INTO orders(prod_id,prod_quantity,prod_info)
+	VALUES(id,quantity,info);
+END;
+```
+**情景：创建带条件逻辑的存储过程，根据订单金额==应用不同折扣率==。**
+
+```MySQL
+CREATE PROCEDURE Discount(IN id INT,OUT total_amount DECIMAL(10,2))
+BEGIN
+	DECLARE t DECIMAL(10,2);
+	SELECT SUM(SELECT prod_price*prod_quantity FROM orders WHERE ord_id = id)
+	INTO t;
+	IF t > 100 THEN SET total_amount = t*0.8;
+	ELSEIF t > 60 THEN SET total_amount = t*0.9;
+	ELSE SET total_amount = t;
+END;
+```
+**情景：设计存储过程==验证用户输入==参数的有效性，防止SQL注入。**
+
+```MySQL
+CREATE PROCEDURE is_input_valid(IN x INT,OUT answer VARCHAR(20))
+BEGIN
+	IF X >= 0 OR X <=10 THEN SET answer = 'Valid Input';
+	ELSE SET answer = 'Invalid Input';
+END;
+```
+#### 第二十四章 使用游标练习题 ####
+
+**情景：使用游标==逐行处理==订单表中的订单金额计算税费。**
+```MySQL
+CREATE PROCEDURE tax_calculating()
+BEGIN
+	DECLARE done BOOLEAN DEFAULT 0;
+	DECLARE id INT;
+	DECLARE tax DECIMAL(8,2);
+	
+	CREATE TABLE IF NOT EXISTS orders_tax
+	(ord_id INT,ord_tax DECIMAL(8,2),PRIMARY KEY(ord_id));
+	
+	DECLARE order_ids CURSOR
+	FOR SELECT ord_id FROM orders;
+	DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done = 1;
+	OPEN order_ids;
+	
+	REPEAT
+		FETCH order_ids INTO id;
+		SELECT (orders.total_amount*0.02) FROM orders WHERE orders.id = id
+		INTO tax;
+		INSERT INTO orders_tax VALUES(id,tax);
+	UNTIL done END REPEAT;
+	
+	CLOSE order_ids;
+END;	
+```
+**情景：创建存储过程使用游标==遍历产品列表==，动态生成库存预警报告。**
+
+```MySQL
+CREATE PROCEDURE warning()
+BEGIN
+	DECLARE done BOOLEAN DEFAULT 0;
+	DECLARE ID INT;
+	DECLARE quantity INT;
+	CREATE TABLE IF NOT EXISTS warning_list
+	(
+    	prod_id INT PRIMARY KEY,
+        prod_quantity INT,
+        prod_state VARCHAR(20)
+    );
+	DECLARE productID CURSOR FOR
+	SELECT prod_id FROM products;
+	DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done = 1;
+	OPEN productID;
+	REPEAT
+		FETCH productID INTO ID;
+		SELECT prod_quantity FROM products WHERE prod_id = ID
+		INTO quantity;
+		IF quantity = 0 THEN INSERT INTO warning_list
+		VALUES(prod_id,quantity,'Out Of Stock');
+		ELSEIF quantity <= 10 THEN INSERT INTO warning_list
+		VALUES(prod_id,quantity,'Very Low Stock');
+        ELSE IF quantity <= 20 THEN INSERT INTO warning_list
+		VALUES(prod_id,quantity,'Low Stock');
+		END IF;
+	UNTIL done END REPEAT;
+	CLOSE productID;
+END;
+```
+**情景：使用游标和条件语句==分类统计==不同价格区间的产品数量。**
+```MySQL
+CREATE PROCEDURE categorical_statistics()
+BEGIN
+	CREATE TABLE IF NOT EXISTS sum_of_products
+	VALUES(price_range VARCHAR(20) PRIMARY KEY,prod_amount INT DEFAULT 0);
+	INSERT INTO sum_of_products(price_range) VALUES('0~50'),('51~100'),('101~');
+	
+	CREATE IDptr CURSOR FOR SELECT prod_id FROM products;
+	
+	DECLARE done BOOLEAN DEFAULT 0;
+	DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done = 1;
+	DECLARE id INT;
+	DECLARE unit_price INT;
+	DECLARE quantity INT;
+	
+	OPEN IDptr;
+	
+	REPEAT
+		FETCH IDptr INTO id;
+		SELECT prod_price,prod_quantity FROM products WHERE prod_id = id
+		INTO unit_price,quantity;
+		IF unit_price BETWEEN 0 AND 50 THEN UPDATE UPDATE sum_of_products
+			SET prod_amount = prod_amount + quantity 
+			WHERE price_range = '0~50';
+		ELSEIF unit_price BETWEEN 51 AND 100 THEN UPDATE UPDATE 					sum_of_products
+			SET prod_amount = prod_amount + quantity 
+			WHERE price_range = '51~100';
+		ELSE UPDATE UPDATE sum_of_products
+			SET prod_amount = prod_amount + quantity 
+			WHERE price_range = '100~';
+		END IF;
+	UNTIL done END REPEAT;
+	
+	CLOSE IDptr;
+END;
+```
+
+
+
+
+
+
+
+
+
+
+>>>>>>> master
 
 
 
