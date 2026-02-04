@@ -80,3 +80,12 @@ This repository contains two main parts of MySQL learning materials:
 - ✅ Implemented version control with Git for tracking learning progress
 - ✅ Added comprehensive README with bilingual documentation
 
+
+
+**Date**: February 4, 2026
+
+**Activities**:
+
+- ✅ Completed exercises from Chapter 23 (Stored Procedures) and Chapter 24 (Cursors)
+- ✅ Finished reading Chapter 25 (Triggers) and practiced applying the concepts
+- ✅ Reviewed and summarized key syntax and use cases for all three topics
