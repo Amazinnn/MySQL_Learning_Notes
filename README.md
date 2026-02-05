@@ -31,11 +31,8 @@
 - **经验分享**：为其他MySQL学习者提供完整的学习路径参考
 
 ---
-<<<<<<< HEAD
-# MySQL Learning Notes Repository Description #
-=======
->>>>>>> master
 
+# MySQL Learning Notes Repository Description #
 ## English Introduction ##
 
 ### Notes Classification ###
@@ -89,3 +86,13 @@ This repository contains two main parts of MySQL learning materials:
 - ✅ Completed exercises from Chapter 23 (Stored Procedures) and Chapter 24 (Cursors)
 - ✅ Finished reading Chapter 25 (Triggers) and practiced applying the concepts
 - ✅ Reviewed and summarized key syntax and use cases for all three topics
+
+
+
+**Date:** February 5, 2026
+
+**Activities:**
+
+- ✅ Organized notes for Chapters 21 through 26
+- ✅ Created additional study outlines on Control Flow and Foreign Keys
+- ✅ Compiled practice questions for Chapters 21, 22, 25, and 26 (To be completed)

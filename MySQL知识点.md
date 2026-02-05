@@ -1629,6 +1629,76 @@ GROUP BY vendors.vend_id;
 | **`ALTER TABLE`风险**    | 在更改表结构前，**务必备份数据**。复杂的结构更改可能需要手动创建新表并迁移数据。 |
 | **外键与引擎**           | 外键不能跨不同存储引擎的表。                                 |
 
+#### 注意事项
+
+1. **搜索引擎的指定**
+
+   MySQL的存储引擎主要在**创建表时**使用 `CREATE TABLE`语句通过 `ENGINE`关键字指定。例如：`CREATE TABLE mytable (...) ENGINE=InnoDB;`。此外，也可以在**修改表结构时**使用 `ALTER TABLE`语句进行更改，例如：`ALTER TABLE mytable ENGINE=MyISAM;`。如果建表时未明确指定，MySQL将使用服务器配置的**默认存储引擎**（通常为InnoDB）。
+
+
+
+2. **避免表名重复**
+
+   在 `CREATE TABLE`语句中使用 `IF NOT EXISTS`子句。其书写格式如下：
+
+   ```MySQL
+   CREATE TABLE IF NOT EXISTS 
+   table_name (
+     column1 datatype,
+     column2 datatype,
+     ...
+   );
+   ```
+
+   当指定此子句后，如果目标数据库中已存在同名表，MySQL 不会报错，而是抛出一个警告并跳过此表的创建操作。这是最常用且推荐的避免重复创建表的方法。
+
+
+
+3. **指定为NULL vs DEFAULT NULL**
+
+   ​	两者不完全等同，但效果通常一致。
+
+   ​	指定 `NULL`表示该列允许存储 `NULL`值，这是一个约束。而 `DEFAULT NULL`是为该列设置默认值为 `NULL`。如果只指定 `NULL`而未用 `DEFAULT`明确设置默认值，MySQL 会隐式地将其默认值设为 `NULL`。因此，在大多数情况下，最终效果是相同的。
+
+
+
+4. **空串 vs NULL**
+
+   好的，这是一个非常核心的概念。
+
+   **空串的含义和作用**
+
+   空串是一个**长度为0的字符串值**（`''`），它是一个有效的、已知的数据，其含义通常被定义为“空白”、“无内容”或“未填写”。它必须存储在具有字符类型（如 `CHAR`, `VARCHAR`, `TEXT`）的列中。
+
+   **NULL的含义**
+
+   ​	`NULL`表示“未知”或“缺失值”。它不是一个值，而是一个状态，意味着“此处没有输入任何数据（包括空串）”。
+
+   **核心区别**
+
+   1. **本质不同**：空串是一个具体的**值**；`NULL`表示**值的缺失状态**。
+   2. **数据比较**：`'' = ''`的结果是 True（相等），但 `NULL = NULL`的结果是 `NULL`（未知）。判断是否为 `NULL`必须使用 `IS NULL`或 `IS NOT NULL`。
+   3. **在查询中的体现**：查询 `WHERE column = ''`只会返回空串的行，而不会返回 `NULL`的行。反之亦然。
+
+   **一个形象的例子**：
+
+   在 `email`字段中：
+
+   - 存储 `NULL`表示“不知道用户的邮箱是什么”。
+   - 存储空串 `''`表示“知道用户没有邮箱”。
+
+
+
+5. **UPDATE与DROP对列的删除**
+
+   ​	UPDATE和DROP删除列有本质区别：
+
+   ​	**UPDATE** 是**数据操作**，用于将列的值更新为NULL（需列允许NULL），不改变表结构。列依然存在，只是内容被清空。格式：`UPDATE table SET column = NULL;`
+
+   ​	**DROP** 是**结构修改**，使用`ALTER TABLE`永久删除整个列及其所有数据，会改变表结构。列被完全移除。格式：`ALTER TABLE table DROP COLUMN column;`
+
+   **核心区别**：UPDATE清空列内容，列仍存在；DROP直接删除列本身，列不复存在。
+
 ---
 
 ### 第二十二章 使用视图 ###
@@ -1698,5 +1768,802 @@ GROUP BY vendors.vend_id;
 | **保护底层表结构**           | 使用视图可以屏蔽底层表的列名变化。如果表结构改变，只需修改视图定义即可使依赖视图的查询继续工作。 |
 | **安全性**                   | 可以通过视图授予用户对特定行或列的访问权限，而不直接授予基表的权限。 |
 
+#### 注意事项
+
+1. **视图不能被更新：缺陷？**
+
+   ​	视图更新的限制并非设计缺陷，而是源于其**虚拟表的本质**。视图本身不存储数据，其内容动态生成于基础表。
+
+   1. **数据映射模糊**：若视图由多表联结（JOIN）定义，数据库引擎无法明确应将`UPDATE`或`INSERT`操作映射到哪个基础表的哪一行，可能破坏数据完整性。
+   2. **聚合结果不可逆**：包含`GROUP BY`、聚合函数或`DISTINCT`的视图，其数据是派生结果。例如，无法直接“更新”一个平均值，因为它由多行数据计算得出。
+   3. **确保数据一致性**：限制更新是为了防止对非直接映射的派生数据（如计算列、子查询结果）进行修改，避免产生逻辑上矛盾或不确定的更新操作。
+
+   ​        这看似是限制，实则是**维护数据一致性和逻辑正确性的关键机制**。如需通过视图修改数据，应确保其定义足够简单（例如，仅来自单表且包含所有必要约束），或转而操作其基础表。
+
+---
+
+### 第二十三章 使用存储过程
+
+#### **核心概念**
+
+- **存储过程**：Stored Procedure，是为以后使用而保存的一条或多条 SQL 语句的集合。可将其视为批处理文件，但其作用不仅限于批处理。
+- **优点**： 
+  - **简化复杂操作**：通过封装处理，简化复杂的操作。 
+  - **保证数据完整性**：确保所有开发人员和应用程序使用相同的代码。 
+  - **简化变动管理**：如果表名、列名或业务逻辑有变化，只需更改存储过程的代码。 
+  - **提高性能**：通常比执行单独的 SQL 语句更快。
+
+- **缺点**：编写比基本 SQL 语句复杂，可能需要更高的技能和安全访问权限。
+
+#### **关键语法与操作**
+
+- **执行存储过程**：使用 `CALL`语句。存储过程可以接受参数。 
+
+  ```mysql
+  CALL productpricing(@pricelow, @pricehigh, @priceaverage);
+  ```
+
+- **创建存储过程**：使用 `CREATE PROCEDURE`语句。如果存储过程接受参数，需在 `()`中列出。使用 `BEGIN ... END`语句来限定存储过程体。 
+  
+  ```mysql
+  CREATE PROCEDURE productpricing() 
+  BEGIN   
+  	SELECT Avg(prod_price) AS priceaverage   
+  	FROM products; 
+  END;
+  ```
+  
+- **删除存储过程**：使用 `DROP PROCEDURE`语句。 
+  
+  ```mysql
+  DROP PROCEDURE productpricing;
+  ```
+  
+- **使用参数**：存储过程的参数有三种类型：
+
+  -  `IN`（传入存储过程） 
+
+  - `OUT`（从存储过程传出）
+
+  -  `INOUT`（对存储过程传入和传出）
+  ```mysql
+  CREATE PROCEDURE productpricing
+  (    
+      OUT pl DECIMAL(8,2),    
+      OUT ph DECIMAL(8,2),    
+      OUT pa DECIMAL(8,2) 
+  ) 
+  BEGIN    
+  	SELECT Min(prod_price) INTO pl FROM products;    
+  	SELECT Max(prod_price) INTO ph FROM products;    
+  	SELECT Avg(prod_price) INTO pa FROM products; 
+  END;
+  ```
+    调用带 `OUT`参数的存储过程时，必须传递变量名（以 `@`开头）。使用 `SELECT`查看变量值。 
+  
+  ```mysql
+  CALL productpricing(@pricelow, @pricehigh, @priceaverage); 
+  SELECT @priceaverage; 
+  SELECT @pricehigh, @pricelow, @priceaverage;
+  ```
+- **使用变量与逻辑控制**：使用 `DECLARE`定义局部变量，使用 `IF`等语句进行逻辑控制。
+
+   ```mysql
+  CREATE PROCEDURE ordertotal
+  (    IN onumber INT,    IN taxable BOOLEAN,    OUT ototal DECIMAL(8,2) ) 
+  COMMENT 'Obtain order total, optionally adding tax' 
+  BEGIN    
+      -- Declare variable for total    
+      DECLARE total DECIMAL(8,2);    
+      
+      -- Declare tax percentage    
+      DECLARE taxrate INT DEFAULT 6;    
+      
+      -- Get the order total    
+      SELECT Sum(item_price*quantity) FROM orderitems    
+      WHERE order_num = onumber INTO total;   
+      
+      -- Is this taxable?    
+      IF taxable THEN        
+      	-- Yes, so add taxrate to the total        
+      	SELECT total+(total/100*taxrate) INTO total;    
+      END IF;    
+      
+      -- And finally, save to out variable    
+      SELECT total INTO ototal; 
+      
+  END;
+  ```
+- **检查存储过程**： 
+
+  - 显示创建语句：`SHOW CREATE PROCEDURE ordertotal;` 
+  - 显示状态列表：`SHOW PROCEDURE STATUS LIKE 'ordertotal';`
+
+#### **易错点与技巧**
+
+| 操作/概念        | 说明/易错点                                                  |
+| ---------------- | ------------------------------------------------------------ |
+| **命令行分隔符** | 在 `mysql`命令行中，默认分隔符 `;`会与存储过程中的 `;`冲突。需要使用 `DELIMITER //`临时更改语句分隔符，定义完存储过程后再改回 `DELIMITER ;`。 |
+| **参数数据类型** | 存储过程的参数允许的数据类型与表中使用的数据类型相同。记录集不是允许的类型。 |
+| **`INTO`位置**   | 用于将检索值保存到变量（或参数）的 `INTO`子句应位于 `FROM`子句之前。 |
+| **`COMMENT`**    | 存储过程的可选注释，会在 `SHOW PROCEDURE STATUS`的结果中显示。 |
+| **智能存储过程** | 将业务规则和智能处理放入存储过程，其威力才真正显现。         |
+
+#### 注意事项
+
+1. **批文件**
+
+   批处理文件（**B**atch File，扩展名为`.bat`或`.cmd`）是一个包含一系列**DOS命令**的纯文本文件（**P**lain Text File）。当运行此文件时，系统会按顺序自动执行其中的所有命令，从而将重复操作自动化（**A**utomate Repetitive Tasks）。
+
+   它的核心作用是简化日常或重复性任务，例如批量创建文件夹或自动运行多个程序。常用命令包括`echo`（显示信息）、`pause`（暂停）和`call`（调用其他批处理文件）。你还可以使用参数（例如`%1`, `%2`）使脚本更具灵活性。
+
+
+
+2. **存储过程返回什么？**
+
+   **是的，MySQL存储过程可以返回值和结果集，但方式不同：**
+
+   **1. 返回值（单个值）**
+
+   - 使用 `OUT`参数：在存储过程中定义 `OUT`参数，用 `INTO`将查询结果赋给该参数
+
+   - 调用后通过会话变量获取：
+
+     ```MySQL
+     CALL proc_name(@output); SELECT @output;
+     ```
+
+   **2. 返回结果集（多行数据）**
+
+   - 直接在存储过程中执行 `SELECT`语句
+   - 调用时会自动返回结果集：`CALL proc_name();`
+
+   **同时获取两者**：在同一个存储过程中既包含返回结果集的 `SELECT`语句，又设置 `OUT`参数值。调用时需要分别处理 - 先获取结果集，再通过会话变量读取输出值。
+
+   **关键区别**：结果集是直接返回的查询结果，而值需要通过参数机制传递。
+
+---
+
+### 第二十四章：使用游标
+
+#### **核心概念**
+
+- **游标**：Cursor，是一个存储在 MySQL 服务器上的数据库查询结果集。
+
+  ​		它不是一条 `SELECT`语句，而是被该语句检索出来的结果集。
+
+- **用途**：在检索出来的行中前进或后退一行或多行。主要用于**交互式应用**，用户需要滚动屏幕上的数据。
+
+- **重要限制**：MySQL 游标**只能用于存储过程（和函数）**。
+
+#### **关键语法与操作**
+
+使用游标涉及几个明确的步骤：
+
+1. **声明（定义）游标**：使用 `DECLARE`语句。这个过程==实际上没有检索数据==。
+2. **打开游标**：使用 `OPEN`语句。这个过程用前面定义的 `SELECT`语句把数据实际检索出来。
+3. **取出数据**：使用 `FETCH`语句。根据需要取出（检索）游标中的各行。
+4. **关闭游标**：使用 `CLOSE`语句。
+
+- **创建（声明）游标**：使用 `DECLARE cursor_name CURSOR FOR select_statement;`。此语句必须位于变量和条件定义之后。
+
+  ```mysql
+  CREATE PROCEDURE processorders() 
+  BEGIN    
+  	DECLARE ordernumbers CURSOR    
+  	FOR SELECT order_num FROM orders; 
+  END;
+  ```
+
+- **打开和关闭游标**：
+
+  -  `OPEN ordernumbers;`-- 处理 `OPEN`语句时执行查询，存储检索出的数据以供浏览和滚动。
+  -  `CLOSE ordernumbers;`-- 游标关闭后，如果没有重新打开，则不能使用。`CLOSE`释放游标使用的所有内部内存和资源。
+
+- **使用游标数据**：使用 `FETCH`语句访问游标中的一行，并向前移动游标内部的行指针。 
+
+  - **基本使用**：`FETCH ordernumbers INTO o;`-- 将当前行的数据检索到局部变量 `o`中。 
+  - **循环检索所有行**：通常需要与循环和条件处理一起使用。 
+  ```mysql
+  CREATE PROCEDURE processorders() 
+  BEGIN    
+  	-- Declare local variables    
+  	DECLARE done BOOLEAN DEFAULT 0;    
+  	DECLARE o INT;    
+  	-- Declare the cursor    
+  	DECLARE ordernumbers CURSOR FOR SELECT order_num FROM orders;    
+  	-- Declare continue handler    
+  	DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done = 1;    
+  	-- Open the cursor    
+  	OPEN ordernumbers;    
+  	-- Loop through all rows    
+  	REPEAT        
+  		-- Get order number        
+  		FETCH ordernumbers INTO o;   
+          -- End of loop    
+          UNTIL done END REPEAT;    
+      -- Close the cursor   
+      CLOSE ordernumbers; 
+  END;
+  ```
+  - **`CONTINUE HANDLER`**：条件出现时被执行的代码。`SQLSTATE '02000'`是一个“未找到”条件，当 `REPEAT`由于没有更多的行供循环而不能继续时，出现这个条件。它在这里将 `done`设置为 1（真）。
+
+- **综合示例**：一个更完整的例子，对检索出的每个订单号调用另一个存储过程来计算总价，并将结果存入新表。 
+
+    ```mysql
+    CREATE PROCEDURE processorders() 
+    BEGIN    
+    	DECLARE done BOOLEAN DEFAULT 0;   
+        DECLARE o INT;   
+        DECLARE t DECIMAL(8,2); 
+        DECLARE ordernumbers CURSOR FOR SELECT order_num FROM orders;  
+        DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done=1;  
+        CREATE TABLE IF NOT EXISTS ordertotals (order_num INT, total DECIMAL(8,2)); 
+        OPEN ordernumbers;  
+        REPEAT      
+            FETCH ordernumbers INTO o;     
+            CALL ordertotal(o, 1, t);     
+            INSERT INTO ordertotals(order_num, total) VALUES(o, t);  
+        UNTIL done END REPEAT;   
+        CLOSE ordernumbers; 
+    END;
+    ```
+
+#### **易错点与技巧**
+
+| 操作/概念             | 说明/易错点                                                  |
+| --------------------- | ------------------------------------------------------------ |
+| **`DECLARE`语句顺序** | 在存储过程中，`DECLARE`语句的次序有严格要求：局部变量必须在任意游标或句柄之前定义，而句柄必须在游标之后定义。 |
+| **`FETCH`不返回数据** | 当 `FETCH`没有取到数据时（如已到结果集末尾），不会报错，而是会设置 `SQLSTATE`为 `02000`（`NOT FOUND`）。必须通过句柄来捕获这种情况。 |
+| **游标性能**          | 游标可能比面向集合的操作慢，因为它们逐行操作。应尽量避免在需要高性能的代码中使用。 |
+| **只读**              | MySQL 游标是只读的，不能通过游标更新数据。                   |
+| **`REPEAT`vs `LOOP`** | 本例使用 `REPEAT`，但 MySQL 也支持 `WHILE`和 `LOOP`循环。`REPEAT`的语法使其特别适合对游标进行循环。 |
+
+#### 注意事项
+
+1. **关于`DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET done=1; `**
+
+   **逐词语解读：**
+
+   - `DECLARE`：声明一个对象（此处为处理器）
+   - `CONTINUE HANDLER`：定义当特定条件发生时，**继续执行**后续语句的处理器
+   - `FOR SQLSTATE '02000'`：触发条件为SQL状态码‘02000’（代表“无更多数据”，常见于游标遍历结束）
+   - `SET done=1;`：触发时将变量`done`设为1，通常用于循环退出判断。
+
+   **能否改用EXIT？可以。** 
+
+   若改为`EXIT HANDLER`，则触发后会**立即退出**当前的`BEGIN...END`代码块（例如存储过程主体）。
+
+---
+
+### 第二十五章：使用触发器
+
+#### **核心概念**
+
+- **触发器**：Trigger，是数据库中的一种特殊对象，它是与表事件（INSERT, UPDATE, DELETE）相关的已命名的数据库对象，当表上发生特定事件时，将激活该对象。
+- **用途**：触发器可用于数据验证、审计、维护衍生数据（如摘要表）等。它们允许在数据库层面执行业务规则，而不是在应用程序代码中。
+- **关键点**： 触发器是自动执行的。 与表相关联，并在特定事件发生时激活。 可以设置为在事件发生前（BEFORE）或发生后（AFTER）执行。
+
+#### **关键语法与操作**
+
+- **创建触发器**：使用 `CREATE TRIGGER`语句。必须指定触发器名称、关联的表、触发事件和时机。 
+
+  ```mysql
+  CREATE TRIGGER trigger_name 
+  {BEFORE | AFTER} 
+  {INSERT | UPDATE | DELETE} 
+  ON table_name 
+  FOR EACH ROW trigger_body;
+  ```
+  
+- **触发器时机（Timing）**： **`BEFORE`**：在触发事件（INSERT, UPDATE, DELETE）**之前**执行触发器。常用于数据验证和净化。 **`AFTER`**：在触发事件**之后**执行触发器。常用于审计、日志记录或更新其他表。
+
+- **`FOR EACH ROW`**：MySQL 目前只支持行级触发器，即受事件影响的每一行都会激活一次触发器。此子句是必须的。
+
+- **访问新旧数据**：在触发器体内，使用 `NEW`和 `OLD`虚拟表来访问受影响行的数据。 **`INSERT`触发器**：可以访问 `NEW.column_name`来获取被插入的新值。`OLD`不可用。 **`UPDATE`触发器**：可以访问 `OLD.column_name`来获取更新前的值，访问 `NEW.column_name`来获取更新后的值。 **`DELETE`触发器**：可以访问 `OLD.column_name`来获取被删除的值。`NEW`不可用。
+
+- **`INSERT`触发器示例**：在插入新订单后，自动返回新的订单号。 
+  
+  ```mysql
+  CREATE TRIGGER neworder 
+  AFTER INSERT ON orders 
+  FOR EACH ROW SELECT NEW.order_num;
+  ```
+  
+- **`DELETE`触发器示例**：在删除一个订单前，将其存档。 
+
+    ```mysql
+    CREATE TRIGGER deleteorder 
+    BEFORE DELETE ON orders 
+    FOR EACH ROW 
+    BEGIN    
+    	INSERT INTO archive_orders(order_num, order_date, cust_id)    
+    	VALUES(OLD.order_num, OLD.order_date, OLD.cust_id); 
+    END;
+    ```
+
+- **`UPDATE`触发器示例**：在更新供应商州名前，确保其总是大写。 
+
+    ```mysql
+    CREATE TRIGGER updatevendor 
+    BEFORE UPDATE ON vendors 
+    FOR EACH ROW 
+    SET NEW.vend_state = UPPER(NEW.vend_state);
+    ```
+
+- **删除触发器**：使用 `DROP TRIGGER`语句。 
+
+  ```mysql
+  DROP TRIGGER trigger_name;
+  ```
+
+#### **易错点与技巧**
+
+| 操作/概念                              | 说明/易错点                                                  |
+| -------------------------------------- | ------------------------------------------------------------ |
+| **每个表每个事件每次只允许一个触发器** | 一个表对每个事件（INSERT, UPDATE, DELETE）和每个时机（BEFORE, AFTER）只能有一个触发器。例如，一个表不能有两个 `BEFORE UPDATE`触发器。 |
+| **`BEFORE`触发器的失败**               | 如果 `BEFORE`触发器执行失败，则相应的 SQL 语句（INSERT/UPDATE/DELETE）也不会执行。 |
+| **`AFTER`触发器的失败**                | 如果 `AFTER`触发器（或语句本身）失败，`BEFORE`触发器所做的任何更改也会被回滚。 |
+| **多语句触发器**                       | 如果触发器体包含多条语句，需要使用 `BEGIN ... END;`块。在命令行中使用时，记得用 `DELIMITER`临时更改语句分隔符。 |
+| **`NEW`值的修改**                      | 在 `BEFORE`触发器中，可以修改 `NEW`的值（例如，用 `SET NEW.column = value;`），从而改变实际插入或更新的数据。在 `AFTER`触发器中，`NEW`是只读的。 |
+| **事务表**                             | 如果表是事务表（如 InnoDB），触发器中的语句与触发语句在同一个事务中，可以一起被回滚。 |
+| **性能**                               | 触发器是自动执行的，对性能有直接影响。复杂的触发器会降低数据操作的速度。 |
+
+#### 注意事项
+
+1. **触发器命名**
+
+   命名限制可以归纳为以下几点：
+
+   1. **唯一性范围**：触发器名称在**单个数据库内**必须是唯一的，但不同数据库中的触发器可以重名。更重要的是，**同一个表上的触发器必须拥有不同的名称**，即使它们被不同的事件（INSERT/UPDATE/DELETE）或时机（BEFORE/AFTER）激活。
+   2. **命名规则**：名称最大长度为64个字符，遵循MySQL标识符的通用规则（例如，可以包含数字、字母、`$`、`_`等，但建议使用有意义的、简洁的英文或下划线组合）。
+   3. **大小写敏感性**：在Unix/Linux系统上，触发器名称是大小写敏感的；在Windows系统上则不敏感。为保证可移植性，建议始终使用小写。
+
+   简而言之，最关键的限制是：**触发器名在其所属的表内必须唯一**。
+
+
+
+2. **触发器对象**
+
+   触发器的触发对象是**表**，并且与作用在该表上的特定**数据变动语句**（即DML事件：`INSERT`、`UPDATE`、`DELETE`）绑定，不能任意指定。
+
+   在创建触发器时，你必须明确指定一个表以及一个（且仅一个）上述事件。例如，你可以创建一个在`employees`表发生`UPDATE`**之前**触发的触发器。
+
+
+
+3. **虚拟表 NEW 与 OLD**
+
+   ​	虚拟表是MySQL在触发器执行过程中自动创建、存储在内存中的临时数据表，用于代表被操作行的新旧数据状态。**NEW和OLD是MySQL严格限定的关键字**，不可自拟。它们有特定含义且仅在特定触发器中可用：
+
+   - **NEW**：代表`INSERT`操作中新插入的行，或`UPDATE`操作中更新后的新行。可修改其值（在`BEFORE`触发器中）。
+   - **OLD**：代表`DELETE`操作中要删除的行，或`UPDATE`操作中更新前的旧行。其值为只读，不可修改。
+
+
+
+4. **NEW OLD 对于三种语句的 BEFORE AFTER 情况的可读性、可更新性**
+
+   | 触发事件   | 触发器时机 | NEW 虚拟表                                   | OLD 虚拟表         | 说明与常见用途                                               |
+   | ---------- | ---------- | -------------------------------------------- | ------------------ | ------------------------------------------------------------ |
+   | **INSERT** | **BEFORE** | **可读、可更新**  （修改后值将被插入）       | **不可用**         | 数据验证、业务规则检查、数据格式化（如：自动生成ID、格式化电话号码）。 |
+   |            | **AFTER**  | **可读、不可更新**  （插入已完成，值为只读） | **不可用**         | 数据插入后的操作，如审计日志、触发其他业务逻辑。             |
+   | **UPDATE** | **BEFORE** | **可读、可更新**  （修改后值将被写入）       | **可读、不可更新** | 数据验证、计算派生字段（如：自动更新`last_updated`时间戳）。 |
+   |            | **AFTER**  | **可读、不可更新**                           | **可读、不可更新** | 数据变更审计、记录历史快照、同步更新其他表。                 |
+   | **DELETE** | **BEFORE** | **不可用**                                   | **可读、不可更新** | 删除前的检查（如：确保引用完整性）、归档被删除的数据。       |
+   |            | **AFTER**  | **不可用**                                   | **可读、不可更新** | 删除后的清理操作、记录删除事件。                             |
+
+
+
+5. **触发器调用存储过程？**
+
+   ​	不，目前MySQL的触发器**不支持**直接调用存储过程。这是一个明确的限制：在触发器体内不能使用`CALL`语句来执行存储过程。如果需要实现复杂逻辑，必须将存储过程中的代码直接写入触发器定义中，或者通过应用程序层来协调调用。
+
+   ​	这个限制是MySQL与其他一些数据库管理系统（如SQL Server）在功能上的一个差异。
+
+
+
+6. **触发器的“拦截”功能**
+
+   **最佳方式：使用SIGNAL语句（MySQL 5.5+）**
+
+   在BEFORE触发器中，通过条件判断后使用SIGNAL抛出自定义错误：
+   
+   ```MySQL
+   IF NEW.column_name = 'invalid_value' THEN
+       SIGNAL SQLSTATE '45000' 
+       SET MESSAGE_TEXT = '拒绝插入：检测到无效值';
+   END IF;
+   ```
+
+---
+
+### 第二十六章 管理事务处理
+
+#### **核心概念**
+
+- **事务处理**：Transaction Processing，用于管理必须成批执行的 SQL 操作，以保证数据库的完整性。事务内的语句要么全部成功，要么全部失败。
+- **事务的 ACID 属性**： **原子性（Atomicity）**：事务是一个不可分割的工作单元。 **一致性（Consistency）**：事务使数据库从一个一致状态转变为另一个一致状态。 **隔离性（Isolation）**：一个事务的执行不能被其他事务干扰。 **持久性（Durability）**：事务一旦提交，其对数据的改变是永久性的。
+- **关键术语**： **事务（Transaction）**：一组 SQL 语句。 **回退（Rollback）**：撤销指定 SQL 语句的过程。 **提交（Commit）**：将未存储的 SQL 语句结果写入数据库表。 **保留点（Savepoint）**：事务处理中设置的临时占位符，可以对它发布回退（而不是回退整个事务）。
+
+#### **关键语法与操作**
+
+- **开始事务**：使用 `START TRANSACTION`来标识一个事务的开始。 
+
+    ```mysql
+    START TRANSACTION;
+    ```
+
+- **回退事务**：使用 `ROLLBACK`语句来撤销所有的 SQL 语句。 
+
+    ```mysql
+    START TRANSACTION;
+    DELETE FROM orderitems; -- 假设误操作
+    ROLLBACK; -- 撤销 DELETE 操作
+    ```
+
+- **提交事务**：使用 `COMMIT`语句在事务处理块中明确提交更改。只有在所有操作都成功后才应提交。 
+
+    ```mysql
+    START TRANSACTION;
+    DELETE FROM orderitems WHERE order_num = 20010;
+    DELETE FROM orders WHERE order_num = 20010;
+    COMMIT; -- 只有两条 DELETE 都成功才最终生效
+    ```
+
+- **使用保留点（Savepoints）**：为了支持部分回退，可以在事务中创建占位符（保留点）。 **设置保留点**：`SAVEPOINT savepoint_name;` **回退到保留点**：`ROLLBACK TO savepoint_name;` 
+
+    ```mysql
+    START TRANSACTION;
+    DELETE FROM orderitems WHERE order_num = 20010;
+    SAVEPOINT sp1; -- 设置一个保留点
+    DELETE FROM orders WHERE order_num = 20010;
+    -- 假设此时发现错误，只想回退第二条删除
+    ROLLBACK TO sp1; -- 回退到 sp1，即只撤销了第二条 DELETE
+    COMMIT; -- 提交事务，最终只删除了 orderitems 中的行
+    ```
+
+- **更改默认的提交行为**：MySQL 默认是自动提交（autocommit）所有更改。为了使用事务，需要关闭此模式。 
+
+    ```mysql
+    SET autocommit = 0; -- 关闭自动提交，直到被重新开启
+    ```
+
+#### **易错点与指导原则**
+
+| 操作/概念                       | 说明/指导原则                                                |
+| ------------------------------- | ------------------------------------------------------------ |
+| **哪些语句可以回滚？**          | 事务处理用来管理 `INSERT`, `UPDATE`, `DELETE`语句。你不能回滚 `SELECT`语句（没意义），也不能回滚 `CREATE`或 `DROP`操作（即使在一个事务处理块中，这些操作也会立即生效）。 |
+| **隐含提交**                    | 当 `COMMIT`或 `ROLLBACK`语句执行后，事务会自动关闭。此外，一些 SQL 语句（如很多 DDL 语句）在执行时会隐含地提交当前活动的事务。 |
+| **`COMMIT`和 `ROLLBACK`的位置** | 在事务中，这些是最后的语句。执行后，事务结束。               |
+| **保留点的释放**                | 保留点在事务结束时（执行 `COMMIT`或 `ROLLBACK`后）会自动释放。也可以用 `RELEASE SAVEPOINT`明确释放，但 MySQL 中不常用。 |
+| **`autocommit`的作用域**        | `autocommit`标志是针对每个连接（session）的，而不是服务器全局设置。 |
+| **使用指导原则**                | 1. **确保数据完整性**：关键操作应放在事务中。 2. **保持事务简短**：事务在执行过程中会锁定资源，长时间的事务会降低系统并发性能。 3. **明智地使用回退**：回退本身也需要消耗资源，不应频繁使用。保留点越多，控制越灵活。 |
+
+#### 注意事项
+
+1. **Save Point**
+
+   ​	可以将Savepoint非常贴切地理解为**存档点（Save Point）**。
+
+   ​	Savepoint是事务（Transaction）内部的**命名标记点**。你可以在一个长事务执行过程中的特定步骤设置多个Savepoint，就像在玩游戏时在不同关卡手动存档。
+
+   ​	**为何与回退整个事务不同？**关键在于**回退的粒度（Granularity）**。
+
+   - **`ROLLBACK`（无Savepoint）**：相当于**退出游戏不存档**，所有操作被撤销，事务直接结束，回到最初状态。
+   - **`ROLLBACK TO [savepoint_name]`**：相当于**读档到某个特定存档点**。它会撤销从该存档点之后到当前的所有操作，但**事务并未结束**。你仍然在事务中，可以基于这个存档点继续执行其他操作或设置新的Savepoint。
+
+   
+
+   2. **DROP vs DELETE：在ROLLBACK的作用**
+
+      **功能区别**
+
+      - **`DELETE`**：用于**删除表中的数据行（Records）**，是数据操作语言（DML）。它作用于表内的数据，不影响表本身的结构（如列、索引、权限）。
+      - **`DROP`**：用于**删除数据库对象（Database Objects）**，是数据定义语言（DDL）。例如删除整个表（`DROP TABLE`）、数据库（`DROP DATABASE`）或视图。
+
+      **为何回滚行为不同？**
+
+      关键原因在于**事务日志（Transaction Log）** 的记录方式。
+
+      1. **`DELETE`可回滚**：当执行`DELETE`时，数据库会详细记录被删除的**每一行数据**到事务日志中。执行`ROLLBACK`时，系统只需根据日志将数据“重放”回去即可。它是一个“可记录”的操作。
+      2. **`DROP`（通常）不可回滚**：当执行`DROP TABLE`时，其操作是**立即生效且大部分数据库默认将其设置为隐式提交（Implicit Commit）**。它会直接删除表的元数据（表结构）和数据文件，并且很多数据库（如MySQL的InnoDB）不会在事务日志中记录足够的信息来重建整个表结构。因此，`ROLLBACK`无法恢复。
+
+   
+
+   3. **TRANSACTION 的提交失败**
+
+      **1. 语句执行错误（Statement Execution Errors）**
+
+      这类错误发生在事务内部执行`INSERT`、`UPDATE`、`DELETE`等语句时。
+
+      - **常见原因**： **约束违反（Constraint Violations）**：如唯一键冲突（`Duplicate key`）、外键约束失败（`Foreign Key Constraint Fails`）。 **数据类型不匹配或溢出（Data Type Mismatch or Overflow）**：例如将字符串存入整型字段。 **锁等待超时（Lock Wait Timeout）**：在等待其他事务释放锁时超过`innodb_lock_wait_timeout`设置。
+      - **对提交的影响**：**此类错误通常不会导致`COMMIT`失败，而是导致当前语句失败。** 默认情况下，事务会继续运行，你可以在事务内处理错误（例如，执行另一条语句）或选择`ROLLBACK`。只有当你发出`COMMIT`时，事务中**已成功执行**的更改才会被持久化。
+
+      **2. 系统级错误（System-level Errors）**
+
+      这类错误发生在更底层，通常意味着数据库服务本身出现了严重问题。
+
+      - **常见原因**： **数据库服务器崩溃（MySQL Server Crash）** 或进程被杀死。 **客户端连接异常断开（Client Connection Abnormally Disconnects）**，如网络中断。 **磁盘空间已满（Disk Full）**，导致无法写入重做日志（Redo Log）。
+      - **对提交的影响**：**这类错误是导致`COMMIT`真正失败的主要原因。** 当`COMMIT`发生时，InnoDB需要将事务日志从缓存刷新到磁盘的重做日志文件中。如果此时发生系统级故障，此过程将无法完成。
+
+      ```mermaid
+      flowchart TD
+          A[Begin Transaction] --> B[Execute SQL Statements]
+          B --> C{执行中是否出现<br>语句级错误?}
+          C -- Yes --> D[当前语句失败]
+          D --> E{是否在事务内<br>处理错误?}
+          E -- No --> F[执行ROLLBACK]
+          E -- Yes --> B
+          C -- No --> G[语句执行成功]
+          G --> H[执行COMMIT]
+          H --> I{COMMIT时是否发生<br>系统级错误?}
+          I -- No --> J[提交成功<br>更改持久化]
+          I -- Yes --> K[提交失败<br>事务自动回滚]
+      ```
+
+      
+
+      4. **Save Point之后的执行流程**
+
+         **核心机制：状态回滚，程序继续**
+
+         ​	`ROLLBACK TO SAVEPOINT`的本质是：**将数据库的数据状态回滚到设置保存点的那一刻，然后继续执行`ROLLBACK ...`语句之后的下一条指令。**
+
+         ​	它不会自动重新执行从保存点到回滚语句之间的代码。执行权立刻交给下一行代码。**是否会形成死循环？不会**，因为数据库**不会自动重复执行**任何语句。
+
+         ```mermaid
+         flowchart TD
+             A[开始事务] --> B[设置保存点: SV1]
+             B --> C[执行操作A]
+             C --> D{操作A是否失败？}
+             D -- 是 --> E[ROLLBACK TO SV1<br>回滚到保存点状态]
+             E -- 程序控制流在此继续 --> F[执行备用操作B]
+             F --> G[提交事务]
+             D -- 否 --> H[继续执行后续操作]
+             H --> G
+             E -- 程序员在此可选择 --> I[重试操作A]
+             I --> D
+         ```
+
+         ```MySQL
+         -- 假设有一个简单的账户表
+         CREATE TABLE accounts (
+             id INT PRIMARY KEY,
+             balance DECIMAL(10, 2)
+         );
+         
+         -- 初始化测试数据
+         INSERT INTO accounts VALUES (1, 1000.00);
+         
+         -- 开始事务
+         START TRANSACTION;
+         
+         -- 第一步操作：为账户1增加100元（这个操作会被保留）
+         UPDATE accounts SET balance = balance + 100 WHERE id = 1;
+         
+         -- 设置一个保存点，标记当前状态
+         SAVEPOINT after_first_update;
+         
+         -- 第二步操作：尝试为账户1扣除200元（假设此操作后可能发现逻辑问题需回滚）
+         UPDATE accounts SET balance = balance - 200 WHERE id = 1;
+         
+         -- 假设此处根据业务逻辑判断，需要撤销扣除200元的操作，但保留增加100元的操作
+         -- 回滚到保存点after_first_update：撤销其后的所有操作（即扣除200元）
+         ROLLBACK TO SAVEPOINT after_first_update;
+         
+         -- 执行权立即交由此处下一行代码，继续执行新操作
+         -- 第三步操作：为账户1扣除50元（此操作将保留）
+         UPDATE accounts SET balance = balance - 50 WHERE id = 1;
+         
+         -- 提交事务，使所有未被回滚的操作生效
+         COMMIT;
+         
+         -- 最终结果：账户1余额为1000 + 100 - 50 = 1050元
+         ```
+
+
+
+5. **Save Point的手动释放**
+
+   手动释放保存点（Manually releasing a SAVEPOINT）的核心作用是**主动的资源管理（Resource Management）**。
+
+   虽然事务结束（COMMIT/ROLLBACK）时会自动释放所有保存点，但在一个非常长或复杂的事务中，提前释放不再需要的保存点是有益的：
+
+   1. **释放资源（Free Resources）**：每个保存点都需要数据库服务器使用少量内存来维护其状态信息。显式释放（Using `RELEASE SAVEPOINT savepoint_name;`）可以立即释放这些资源。
+   2. **避免命名冲突**：在复杂的事务逻辑中，你可能会希望重用同一个保存点名称。先释放之前的，再创建一个同名的新保存点，可以使代码更清晰。
+   3. **代码清晰性**：明确地释放保存点，就像在编程中释放一个临时变量一样，表明了该保存点的生命周期已经结束，提高了代码的可读性。
+
+
+
+6. **autocommit**
+
+   **当 `autocommit=1`(默认)**
+
+   ​	显式书写的 `COMMIT`语句**完全有效**。当你使用 `START TRANSACTION`或 `BEGIN`开启一个显式事务（explicit transaction）时，它会临时挂起自动提交模式。此时，你必须使用 `COMMIT`来提交这个事务块内的更改。
+
+   **当 `autocommit=0`**
+
+   ​	所有数据修改语句（DML statements，如 `INSERT`, `UPDATE`, `DELETE`）**不会自动提交**。它们会形成一个打开的事务，更改仅对当前会话可见，直到你执行 `COMMIT`（使其永久化）或 `ROLLBACK`（撤销）。这**正是**设置 `autocommit=0`的目的。
+
+   **关于“危险”**
+
+   ​	`autocommit=0`确实增加了风险。如果连接结束后忘记手动提交，所有更改将丢失。更危险的是，如果下一个用户在同一连接上执行操作并提交，可能会意外地提交你之前未提交的更改。因此，**通常建议保持 `autocommit=1`（默认）**，仅在需要多语句原子性时使用显式事务。
+
+
+
+7. **autocommit的生效范围**
+
+   ​	**`autocommit`的设置是每个客户端连接（Client Connection）会话级别的独立配置，而不是一个全局的服务器（Server-wide）配置。**
+
+   - **服务器** 可以有一个默认的 `autocommit`初始值（通常为1）。
+   - 但当**每个客户机应用程序**（如你的命令行工具、网站程序）连接到服务器时，它们都建立了一个独立的会话（Session）。每个会话都可以根据自己的需要，使用 `SET autocommit=0`或 `SET autocommit=1`来修改自己的 `autocommit`状态，而不会影响其他连接的设置。
+
+
+
 ------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
+
+### What's More
+
+### **外键（Foreign Key）**
+
+外键是数据库参照完整性的核心机制，用于建立表与表之间的关联。它确保一个表（从表/子表）中的某列值必须存在于另一个表（主表/父表）的指定列（通常是主键）中。
+
+#### **核心概念与术语**
+
+- **主表 / 父表（Parent Table / Referenced Table）**：被引用的表，其被参考的列必须具有唯一性约束（如`PRIMARY KEY`或`UNIQUE KEY`）。
+- **从表 / 子表（Child Table / Referencing Table）**：包含外键列的表，该列的值参考自主表。
+- **外键约束名（Constraint Name）**：外键约束规则的唯一标识符，用于后续管理（如删除约束），与**外键列名（Column Name）**（存储实际数据的字段）是不同概念。
+
+#### **创建外键约束**
+
+外键约束可在建表时定义或之后添加。
+
+- **创建表时定义（At Table Creation）** 在 `CREATE TABLE`语句的列定义后使用 `FOREIGN KEY`关键字。 `CREATE TABLE child_table (    id INT PRIMARY KEY,    parent_id INT, -- 外键列    -- 方法1：直接定义，系统自动生成约束名    FOREIGN KEY (parent_id) REFERENCES parent_table(id) ); CREATE TABLE child_table (    id INT PRIMARY KEY,    parent_id INT,    -- 方法2：使用CONSTRAINT命名约束（推荐）    CONSTRAINT fk_child_parent FOREIGN KEY (parent_id)     REFERENCES parent_table(id) );`
+- **为已存在表添加（Adding to Existing Table）** 使用 `ALTER TABLE`语句添加外键约束。 `ALTER TABLE child_table ADD CONSTRAINT fk_child_parent -- 指定约束名称 FOREIGN KEY (parent_id) -- 指定本表中的外键列 REFERENCES parent_table(id); -- 引用主表及其主键列`**前提条件**：从表中外键列的现有数据必须与主表被引用列的值一致或为`NULL`，否则添加会失败。
+
+#### **删除外键约束**
+
+使用 `ALTER TABLE`语句，通过**约束名**而非列名来删除。
+
+```
+ALTER TABLE child_table
+DROP FOREIGN KEY fk_child_parent; -- 删除名为 fk_child_parent 的外键约束
+```
+
+**关键点**：删除外键约束后，MySQL会自动创建的索引可能依然存在，如需删除该索引，需额外执行 `DROP INDEX`语句。
+
+#### **外键约束的参照操作（Referential Actions）**
+
+定义外键时，可通过 `ON DELETE`和 `ON UPDATE`子句设定当主表数据被删除或更新时，从表数据的处理规则。
+
+| 操作关键字              | 描述（Description） | 对子表的影响                                                 |
+| ----------------------- | ------------------- | ------------------------------------------------------------ |
+| `RESTRICT`/ `NO ACTION` | 限制（默认）        | 如果子表有匹配记录，则禁止删除/更新父表对应记录。            |
+| `CASCADE`               | 级联                | 父表记录被删除/更新时，同步删除/更新子表中所有关联记录。     |
+| `SET NULL`              | 置空                | 父表记录被删除/更新时，将子表中对应记录的外键列值设为`NULL`（要求该列允许`NULL`）。 |
+| `SET DEFAULT`           | 设为默认值          | 父表记录被删除/更新时，将子表中对应记录的外键列值设为默认值（InnoDB引擎不支持）。 |
+
+**语法示例**：
+
+```
+CREATE TABLE orders (
+    order_id INT PRIMARY KEY,
+    customer_id INT,
+    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    ON DELETE CASCADE   -- 父表记录删除时级联删除
+    ON UPDATE SET NULL -- 父表主键更新时子表外键置空
+);
+```
+
+#### **外键约束的关键限制与易错点**
+
+- **存储引擎（Storage Engine）**：**必须使用InnoDB引擎**。MyISAM等引擎不支持外键约束，即使语法成功也无效。
+- **数据类型匹配（Data Type Compatibility）**：外键列与主表被引用列的数据类型必须**完全一致**（如`INT`与`TINYINT`可能不兼容），否则创建失败（ERROR 1005）。
+- **引用列必须唯一**：外键必须引用主表的`PRIMARY KEY`或`UNIQUE KEY`。
+- **索引（Index）**：MySQL通常会自动在外键列上创建索引以提高查询性能。如果该列已有索引（需满足要求），则可能不再自动创建。
+- **操作顺序**：创建时，应先创建主表，再创建从表。删除时，应先删除从表（或先删除外键约束），再删除主表。
+
+#### **实用命令与技巧**
+
+- **查看外键约束名**：如果忘记约束名，使用以下命令查看。 `SHOW CREATE TABLE child_table\G`
+- **临时禁用外键检查**：在大量数据导入等场景，可暂时关闭外键检查提升效率。操作完成后务必重新开启。 `SET FOREIGN_KEY_CHECKS = 0; -- 禁用检查 -- 执行数据导入等操作... SET FOREIGN_KEY_CHECKS = 1; -- 重新启用检查`
+
+---
+
+### **MySQL流程控制语句（Flow Control Statements）**
+
+​	MySQL流程控制语句主要用于**存储程序（Stored Programs）**中，包括存储过程（Stored Procedures）、存储函数（Stored Functions）和触发器（Triggers），用于实现条件判断、循环等复杂的业务逻辑。这些语句增强了SQL的过程化处理能力。
+
+#### **分支结构（Branching Structure）**
+
+用于根据条件执行不同的代码路径。
+
+- **IF语句（IF Statement）** 语法格式如下，用于实现多条件分支判断： `IF condition1 THEN    statement_list1; ELSEIF condition2 THEN    statement_list2; ... ELSE    statement_listN; END IF;`**关键点**： 必须以 `END IF;`结束。 `ELSEIF`是连写为一个单词。 区别于 `IF()`函数（`IF(expr, true_value, false_value)`），`IF`语句用于存储程序内执行语句块，而 `IF()`函数用于表达式求值返回结果。
+- **CASE语句（CASE Statement）** 提供两种形式的条件判断： **简单CASE语句（Simple CASE Statement）**：基于一个表达式的精确匹配。 `CASE case_value    WHEN when_value1 THEN statement_list1;    WHEN when_value2 THEN statement_list2;    ...    ELSE statement_listN; END CASE;`**搜索CASE语句（Searched CASE Statement）**：基于多个布尔条件判断。 `CASE    WHEN condition1 THEN statement_list1;    WHEN condition2 THEN statement_list2;    ...    ELSE statement_listN; END CASE;`**关键点**： 必须以 `END CASE;`结束。 存储程序中的 `CASE`语句与SQL查询中的 `CASE`表达式语法略有不同（如使用 `END CASE`而非 `END`）。
+
+#### **循环结构（Loop Structure）**
+
+用于重复执行语句块。
+
+- **LOOP循环（LOOP Loop）** 创建一个无限循环（Infinite Loop），必须使用 `LEAVE`语句退出。 `[loop_label:] LOOP    statement_list;    IF exit_condition THEN        LEAVE loop_label; -- 退出循环    END IF; END LOOP [loop_label];`
+- **WHILE循环（WHILE Loop）** 先判断条件，条件为真（TRUE）时执行循环体。属于**前测试循环（Pre-test Loop）**。 `[while_label:] WHILE condition DO    statement_list; END WHILE [while_label];`
+- **REPEAT循环（REPEAT Loop）** 先执行一次循环体，再判断条件。条件为真时退出。属于**后测试循环（Post-test Loop）**。 `[repeat_label:] REPEAT    statement_list;    UNTIL condition -- 注意：此处不要加分号 END REPEAT [repeat_label];`
+
+| 循环类型     | 功能描述         | 循环特点               | 退出条件方式                 |
+| ------------ | ---------------- | ---------------------- | ---------------------------- |
+| **`LOOP`**   | 基础循环         | 无限循环（死循环）     | 必须使用 `LEAVE`语句显式退出 |
+| **`WHILE`**  | 带条件判断的循环 | 先判断后执行（前测试） | 条件为 **FALSE** 时退出循环  |
+| **`REPEAT`** | 带条件判断的循环 | 先执行后判断（后测试） | 条件为 **TRUE** 时退出循环   |
+
+#### **循环控制语句（Loop Control Statements）**
+
+用于在循环内部进行精细控制。
+
+- **LEAVE语句（LEAVE Statement）** 用于**立即退出**（跳出）指定的循环或带标签的 `BEGIN...END`块。作用类似于Java/C中的 `break`关键字。 `LEAVE label_name;`
+- **ITERATE语句（ITERATE Statement）** 用于**立即结束本次循环**，跳过剩余语句，直接开始下一次循环迭代。作用类似于Java/C中的 `continue`关键字。 `ITERATE label_name;`
+
+**核心区别**：`LEAVE`是跳出整个循环，`ITERATE`是跳过本次循环。两者都必须与**标签（Label）** 配合使用。
+
+
+
+
+
+
+
+
+
+
 
