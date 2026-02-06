@@ -891,7 +891,9 @@ BEGIN
 	ON c.cust_id = id AND o.cust_id = id;
 END;
 ```
-**情景：创建存储过程，输入==订单编号==，通过OUT参数返回该订单的==总金额==								     		（总金额 = 订单明细中所有商品的单价 × 数量之和）。**
+**情景：创建存储过程，输入==订单编号==，通过OUT参数返回该订单的==总金额==**
+
+**（总金额 = 订单明细中所有商品的单价 × 数量之和）。**
 
 ```MySQL
 CREATE PROCEDURE TotalAmount(IN id INT,OUT total_amount DECIMAL(10,2))
@@ -1031,81 +1033,282 @@ BEGIN
 END;
 ```
 
-#### 第二十五章 使用存储过程练习题
+#### 第二十五章 使用触发器练习题 ####
 
-**情景：创建存储过程==查询指定产品==的库存和价格信息。**
+**情景：创建BEFORE INSERT触发器==自动格式化==新插入的产品名称为大写。**
+
+```MySQL
+CREATE TRIGGER upper_rename BEFORE INSERT
+ON products FOR EACH ROW
+BEGIN
+	SET NEW.prod_name = Upper(NEW.prod_name);
+END;
+```
+
+**情景：使用AFTER UPDATE触发器==记录==产品价格变更历史到日志表。**
+
+```MySQL
+CREATE TRIGGER price_record BEFORE UPDATE
+ON products FOR EACH ROW
+BEGIN
+	INSERT INTO prod_log(prod_name,old_price,new_price)
+	VALUES(NEW.prod_name,OLD.prod_price,NEW.prod_price);
+END;	
+```
+
+**情景：通过BEFORE DELETE触发器==防止误删==重要客户记录。**
+
+```MySQL
+CREATE TRIGGER avoid_deleting_vip BEFORE DELETE
+ON customers FOR EACH ROW
+BEGIN
+	IF (OLD.cust_state = 'vip') 
+	THEN SIGNAL SQLSTATE '45000'
+	SET MESSAGE_TEXT 'Cannot delete the VIP customer!';
+	END IF;
+END;
+```
+
+**情景：创建触发器==自动计算==订单总金额并更新到订单表。**
+
+```MySQL
+CREATE TABLE orders (
+    order_id INT AUTO_INCREMENT PRIMARY KEY,
+    total_amount DECIMAL(10, 2) DEFAULT 0
+);
+
+CREATE TABLE order_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT,
+    price DECIMAL(10, 2),
+    quantity INT,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TRIGGER order_item_after_insert AFTER INSERT
+ON order_items FOR EACH ROW
+BEGIN
+	UPDATE orders
+	SET total_amount = total_amount + NEW.price*NEW.quantity
+	WHERE order_id = NEW.order_id;
+END;
+
+CREATE TRIGGER after_order_item_update
+AFTER UPDATE ON order_items
+FOR EACH ROW
+BEGIN
+    UPDATE orders 
+    SET total_amount = total_amount + (NEW.price * NEW.quantity - OLD.price * OLD.quantity)
+    WHERE order_id = NEW.order_id;
+END;
+
+CREATE TRIGGER after_order_item_delete
+AFTER DELETE ON order_items
+FOR EACH ROW
+BEGIN
+    UPDATE orders 
+    SET total_amount = total_amount - (OLD.price * OLD.quantity)
+    WHERE order_id = OLD.order_id;
+END;
+```
+
+**P S :**
+
+​	如果你尝试向 `orderitems`表插入一条记录，但这条记录中的 `orderid`值在 `orders`表中不存在，MySQL 数据库将会阻止这次插入操作，并返回一个外键约束错误，提示信息通常是 `ERROR 1452: Cannot add or update a child row`。这是因为外键约束的核心作用是强制保持数据的**引用完整性**，确保从表（`orderitems`）中的外键值必须在主表（`orders`）中有对应的有效值 。
+
+​	因此，正确的操作顺序必须是：先在 `orders`表中创建订单记录，获取其 `orderid`后，才能使用这个有效的 `orderid`向 `orderitems`表插入对应的订单物品记录 。这样可以有效避免数据中出现“孤儿”记录，保证关联查询结果的正确性 。
+
+**情景：使用NEW和OLD虚拟表==验证==更新数据的有效性。**
+
+> 维护公司的员工薪资表 `employees`。为了确保数据逻辑正确，规定**任何员工的薪资更新后，新工资 (`new_salary`) 不得低于其原工资 (`old_salary`)**。
+
+```MySQL
+CREATE TRIGGER salary_check BEFORE UPDATE
+ON employees FOR EACH ROW
+BEGIN
+	IF NEW.salary < OLD.salary THEN
+		SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT 'Salary is too low!';
+	END IF;
+END;
+```
+
+**情景：通过触发器==实现==库存数量自动扣减和预警。**
+
+> 在一个电商系统数据库中，有商品库存表 `products`和订单明细表 `order_details`。为了实时保持库存准确性，并当库存过低时自动预警，请创建触发器实现以下自动化流程。
+
+```MySQL
+CREATE TRIGGER stock_alarming BEFORE INSERT
+ON order_details FOR EACH ROW
+BEGIN
+	UPDATE products
+	SET products.quantity = products.quantity - NEW.quantity
+	WHERE products.prod_id = NEW.prod_id;
+	UPDATE products
+	SET products.is_low_stock = 'TRUE'
+	WHERE products.quantity <= 10;
+END;
+```
+
+**情景：创建复合触发器==处理==订单状态变更的连锁业务逻辑。**
+
+> 订单状态的变更通常伴随着一系列连锁业务操作。假设订单主表 `orders`的状态 (`status`) 从 **‘已付款’** 变更为 **‘已完成’** 时，系统需要自动执行以下两个操作：
+>
+> 1. 将完成订单的商品数量累加到对应商品的 **总销量** (`total_sold`) 字段中。
+> 2. 为下单用户增加相应的 **积分** (`points`)。
+
+```MySQL
+CREATE TRIGGER increase_sales_amount 
+BEFORE UPDATE ON orders FOR EACH ROW
+BEGIN
+	UPDATE products SET total_sold = total_sold + NEW.quantity
+	WHERE products.prod_id = NEW.prod_id;
+	DECLARE order_amount DECIMAL(10,2) DEFAULT 0;
+	SELECT NEW.prod_quantity*NEW.prod_unit_price INTO arder_amount;
+	UPDATE customers AS c SET c.points = c.points + order_amount/10 ;
+END;
+```
+
+**情景：使用触发器==禁止==在非工作时间修改核心业务数据。**
+
+> 为了保障公司核心业务数据（如 **`financial_records`财务记录表**）在非工作时段（**晚上6点到次日8点**）不被意外修改，需要建立一个数据“安全锁”。
+
+```MySQL
+CREATE TRIGGER data_safety_lock BEFORE UPDATE
+ON financial_records FOR EACH ROW
+BEGIN
+	IF (TIME() BETWEEN 18:00:00 AND 23:59:59) 
+	OR (TIME() BETWEEN 00:00:00 AND 08:00:00)
+		SIGNAL SQLSTATE '45000'
+		SET MESSAGE_TEXT 'Modifing data is not allowed.';
+	END IF;
+END;
+```
+
+#### 第二十六章 管理事务处理练习题 ####
+
+**情景：使用事务==保证==订单和订单项的同时插入或回滚。**
 
 ```MySQL
 
+CREATE PROCEDURE CreateOrderWithItems()
+BEGIN
+    -- 声明变量用于错误处理和流程控制
+    DECLARE success BOOLEAN DEFAULT TRUE;
+    DECLARE error_message VARCHAR(255) DEFAULT '';
+
+    -- 开始事务[3,4](@ref)
+    START TRANSACTION;
+
+    -- 1. 插入主订单记录
+    INSERT INTO orders (order_number, customer_id, amount) 
+    VALUES ('ORD202502061200001', 1001, 299.00);
+
+    -- 检查订单插入是否成功
+    IF ROW_COUNT() = 0 THEN
+        SET success = FALSE;
+        SET error_message = 'Failed to insert order record.';
+    END IF;
+
+    -- 获取刚插入的订单ID
+    SET @last_order_id = LAST_INSERT_ID();
+
+    -- 2. 逐条插入订单明细，并检查每条是否成功
+    IF success THEN
+        -- 插入第一条订单明细
+        INSERT INTO order_items (order_id, product_id, quantity, price) 
+        VALUES (@last_order_id, 501, 2, 99.50);
+        IF ROW_COUNT() = 0 THEN
+            SET success = FALSE;
+            SET error_message = 'Failed to insert first order item.';
+        END IF;
+    END IF;
+
+    IF success THEN
+        -- 插入第二条订单明细
+        INSERT INTO order_items (order_id, product_id, quantity, price) 
+        VALUES (@last_order_id, 502, 1, 100.00);
+        IF ROW_COUNT() = 0 THEN
+            SET success = FALSE;
+            SET error_message = 'Failed to insert second order item.';
+        END IF;
+    END IF;
+
+    -- 3. 根据所有操作的成功与否决定提交或回滚[5](@ref)
+    IF success THEN
+        COMMIT;
+        SELECT 'Order and all items inserted successfully.' AS result;
+    ELSE
+        ROLLBACK;
+        SELECT CONCAT('Transaction rolled back: ', error_message) AS result;
+    END IF;
+
+END;
+
+-- 调用存储过程执行事务
+CALL CreateOrderWithItems();
 ```
 
-**情景：设计存储过程==计算订单总金额==，使用IN参数传入订单号。**
+**情景：通过保留点==实现==多步骤数据导入的部分回滚能力。**
+
 ```MySQL
+-- 产品表
+CREATE TABLE products (
+    product_id INT AUTO_INCREMENT PRIMARY KEY,
+    product_name VARCHAR(100) NOT NULL,
+    stock_quantity INT NOT NULL,
+    category VARCHAR(50)
+);
 
+START TRANSACTION;
+
+-- 步骤1: 导入基础产品信息 (假设此步骤必须成功)
+INSERT INTO products (product_name, stock_quantity, category) 
+VALUES ('新款T恤', 100, '服装');
+
+-- 设置保存点 after_step1
+SAVEPOINT after_step1;
+
+-- 步骤2: 执行一个可能失败的数据更新操作 (例如，库存调整逻辑复杂)
+UPDATE products SET stock_quantity = stock_quantity - 10 WHERE product_name = '新款T恤';
+
+-- 检查步骤2是否成功 (这里用受影响行数模拟，实际应用需更严谨判断)
+IF ROW_COUNT() = 0 THEN
+    -- 步骤2失败，回滚到保存点 after_step1，即撤销UPDATE操作，保留INSERT操作
+    ROLLBACK TO SAVEPOINT after_step1;
+    -- 可选择执行其他补救措施或记录日志
+END IF;
+
+-- 步骤3: 继续其他操作...
+-- INSERT INTO ... 等其他逻辑
+
+-- 最终提交事务（保存点之前的操作和保存点之后未回滚的操作将被提交）
+COMMIT;
 ```
-**情景：创建带OUT参数的存储过程==统计客户订单数量==。**
+
+**情景：利用事务==确保==库存检查和扣减的原子性执行。**
+
 ```MySQL
-
+CREATE PROCEDURE stock_check
+(
+	IN prod_id INT,
+    IN prod_demand INT
+)
+BEGIN
+    DECLARE curr_stock INT DEFAULT 0;
+	START TRANSACTION;
+	UPDATE product_inventory AS pi 
+	SET prod_stock = prod_stock - curr_stock
+	WHERE pi.prod_id = prod_id;
+	SELECT prod_stock FROM pi
+	WHERE p_i.prod_id = prod_id INTO curr_stock;
+	IF curr_stock < 0 THEN
+		ROLLBACK;
+	ELSE
+		COMMIT;
+	END IF;
+END;
+		
 ```
-**情景：使用存储过程==批量更新==多个产品的折扣价格。**
-```MySQL
-
-```
-**情景：设计存储过程处理新订单，包含==事务处理==确保数据一致性。**
-```MySQL
-
-```
-**情景：创建存储过程使用==IF条件逻辑==根据订单金额应用不同折扣率。**
-```MySQL
-
-```
-**情景：设计存储过程==验证输入参数==的有效性，防止SQL注入攻击。**
-```MySQL
-
-```
-**情景：使用存储过程==生成销售报告==，包含多种统计指标计算。**
-```MySQL
-
-```
-#### 第二十六章 使用游标练习题
-
-**情景：使用游标==逐行处理==订单表中的金额计算税费。**
-```MySQL
-
-```
-**情景：创建存储过程使用游标==遍历产品列表==，动态生成库存预警报告。**
-```MySQL
-
-```
-**情景：使用游标和REPEAT循环==分类统计==不同价格区间的产品数量。**
-```MySQL
-
-```
-**情景：通过游标==处理客户分级==，根据消费金额自动更新客户等级。**
-```MySQL
-
-```
-**情景：使用游标==批量生成==客户对账单，包含订单明细和汇总信息。**
-```MySQL
-
-```
-**情景：创建游标==处理层次结构数据==，计算部门层级关系。**
-```MySQL
-
-```
-**情景：使用游标实现==数据迁移==，将旧系统数据转换到新表结构。**
-```MySQL
-
-```
-**情景：通过游标==处理复杂业务逻辑==，实现多步骤数据校验和转换。**
-```MySQL
-
-```
-
-
-
-
-
 
 
 
